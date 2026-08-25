@@ -1,7 +1,5 @@
 # RadOnc Contour Metrics Lab
 
-A browser-only TypeScript/React recreation of the original Streamlit teaching app. Students can explore synthetic contours or draw a reference and test contour, transform them, and compare 2D overlap and surface-distance metrics. All calculations run locally in each student's browser—there is no shared Python server or per-class concurrency bottleneck.
-
 ## Included metrics
 
 - DICE coefficient, Jaccard index, and area ratio
@@ -12,31 +10,6 @@ A browser-only TypeScript/React recreation of the original Streamlit teaching ap
 - Analytic circle overlap for clean synthetic circles; rasterised overlap for noisy or hand-drawn polygons
 - Arc-length resampling for robust surface comparisons
 
-## Run locally
-
-Use Node.js 22 or later.
-
-```bash
-npm ci
-npm run test:github
-npm run dev
-```
-
-For a plain static preview matching GitHub Pages:
-
-```bash
-npm run build:github
-npx vite preview --outDir dist-github
-```
-
-## Deploy free on GitHub Pages
-
-1. Create a GitHub repository and push this project to its `main` branch.
-2. In the repository, open **Settings → Pages**.
-3. Under **Build and deployment**, choose **GitHub Actions** as the source.
-4. The included `.github/workflows/deploy-pages.yml` workflow tests, builds, and deploys the app on every push to `main`.
-
-The Vite configuration automatically detects the repository name, so images and scripts work at `https://YOUR-NAME.github.io/REPOSITORY/` without editing paths.
 
 ## Metric implementation notes
 
