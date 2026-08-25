@@ -654,7 +654,7 @@ export default function ContourApp() {
       </header>
       {page === "explorer" ? <SyntheticExplorer /> : <DrawingWorkspace />}
       <footer>
-        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.2.0</p>
+        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.2.1</p>
         <p>Educational use only. Metric acceptability is task- and context-dependent. <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a></p>
       </footer>
     </div>

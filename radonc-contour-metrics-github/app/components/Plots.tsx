@@ -221,12 +221,24 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
           )}
 
           {isApl && (
-            <ToleranceContour
-              points={metrics.pointsA}
-              distances={metrics.aToB}
-              threshold={metrics.threshold}
-              prefix="apl-reference-path"
-            />
+            <>
+              <ToleranceContour
+                points={metrics.pointsA}
+                distances={metrics.aToB}
+                threshold={metrics.threshold}
+                prefix="apl-reference-path"
+              />
+              <path
+                d={pathFor(metrics.pointsB)}
+                fill="none"
+                stroke="#66758a"
+                strokeWidth="1.7"
+                strokeDasharray="5 4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.95"
+              />
+            </>
           )}
 
           {isHeat && (
@@ -298,6 +310,7 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
       {isApl && (
         <Legend
           items={[
+            { color: "#66758a", label: "Current test contour", dashed: true },
             { color: "#138a5b", label: "Ground-truth path represented in test" },
             { color: "#f29a38", label: "Path to add to test (APL)" },
           ]}

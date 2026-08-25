@@ -48,7 +48,7 @@ APL follows the reference-ground-truth convention: it is the length of the **gro
 
 The coordinate plots span −10 to +10 on each axis, but that range is a display window only. Metrics use the complete contour geometry and the app warns when a contour extends beyond the visible field.
 
-Plot colours describe the quantity shown rather than repeating contour identities. The bidirectional surface-distance plot colours both surfaces only by tolerance status. The Surface Dice test-to-reference map keeps the reference and its tolerance band in blue/green and classifies the test surface as within or outside tolerance. The APL plot colours the ground-truth path as already represented in the test or as boundary path that must be added to the test.
+Plot colours describe the quantity shown rather than repeating contour identities. The bidirectional surface-distance plot colours both surfaces only by tolerance status. The Surface Dice test-to-reference map keeps the reference and its tolerance band in blue/green and classifies the test surface as within or outside tolerance. The APL plot shows the current test contour as a neutral dashed outline, while colouring the ground-truth path as already represented in the test or as boundary path that must be added to the test.
 
 CT images are illustrative backgrounds only. Their displayed centimetre scale is relative and is not calibrated to DICOM pixel spacing.
 
