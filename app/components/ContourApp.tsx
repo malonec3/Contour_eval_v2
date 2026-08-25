@@ -155,7 +155,7 @@ function MetricsOverview({ metrics, unit }: { metrics: ContourMetrics; unit: str
       <MetricPill label="Mean distance" value={`${metrics.meanSurfaceDistance.toFixed(2)} ${unit}`} tone="green" />
       <MetricPill label={`HD${Math.round(metrics.percentile)}`} value={`${metrics.hausdorffPercentile.toFixed(2)} ${unit}`} tone="orange" />
       <MetricPill label="Maximum HD" value={`${metrics.maximumHausdorff.toFixed(2)} ${unit}`} tone="orange" />
-      <MetricPill label="APL (reference)" value={`${metrics.addedPathLength.toFixed(2)} ${unit}`} tone="blue" />
+      <MetricPill label="APL (path to add)" value={`${metrics.addedPathLength.toFixed(2)} ${unit}`} tone="blue" />
     </section>
   );
 }
@@ -180,14 +180,14 @@ function PlotCollection({ metrics, tab, unit }: { metrics: ContourMetrics; tab: 
       {tab === "overview" ? (
         <>
           <ContourPlot metrics={metrics} kind="surface" title="Surface Distance Analysis" unit={unit} />
-          <ContourPlot metrics={metrics} kind="acceptance" title="Test-to-Reference Tolerance Map" unit={unit} />
+          <ContourPlot metrics={metrics} kind="acceptance" title="Surface Dice: Test-to-Reference Map" unit={unit} />
           <ContourPlot metrics={metrics} kind="overlap" title="2D Area Overlap" unit={unit} />
         </>
       ) : (
         <>
           <DistanceHistogram metrics={metrics} unit={unit} />
           <ContourPlot metrics={metrics} kind="heat" title="Distance Field Analysis" unit={unit} />
-          <ContourPlot metrics={metrics} kind="apl" title="Added Path Length (Reference)" unit={unit} />
+          <ContourPlot metrics={metrics} kind="apl" title="Added Path Length: Path to Add to Test" unit={unit} />
         </>
       )}
     </div>
@@ -269,7 +269,7 @@ function SyntheticExplorer() {
             <dt>Surface DICE</dt><dd>Arc length of both surfaces lying within tolerance, divided by their combined perimeter.</dd>
             <dt>MSD</dt><dd>Arc-length-weighted mean of bidirectional point-to-segment surface distances.</dd>
             <dt>HD percentile</dt><dd>The larger directional percentile, reducing sensitivity to isolated outliers.</dd>
-            <dt>APL</dt><dd>Reference-contour length requiring redraw because it lies beyond tolerance from the test contour.</dd>
+            <dt>APL</dt><dd>Ground-truth boundary path not captured within tolerance by the test contour. This is the path to add when correcting the test.</dd>
           </dl>
         </details>
       </aside>
@@ -615,7 +615,7 @@ function DrawingWorkspace() {
           <div className="three-metric-groups">
             <article><h3>2D overlap</h3><p><span>DICE coefficient</span><b>{results.dice.toFixed(4)}</b></p><p><span>Jaccard index</span><b>{results.jaccard.toFixed(4)}</b></p><p><span>Area ratio</span><b>{results.volumeRatio.toFixed(4)}</b></p></article>
             <article><h3>Surface metrics</h3><p><span>Surface DICE</span><b>{results.surfaceDice.toFixed(4)}</b></p><p><span>Mean distance</span><b>{results.meanSurfaceDistance.toFixed(3)} {unit}</b></p><p><span>HD{Math.round(results.percentile)}</span><b>{results.hausdorffPercentile.toFixed(3)} {unit}</b></p></article>
-            <article><h3>Geometry &amp; path edits</h3><p><span>Reference area</span><b>{results.areaA.toFixed(2)} {unit}²</b></p><p><span>Test area</span><b>{results.areaB.toFixed(2)} {unit}²</b></p><p><span>APL (reference)</span><b>{results.addedPathLength.toFixed(2)} {unit}</b></p><p><span>Test excess path</span><b>{results.testExcessPathLength.toFixed(2)} {unit}</b></p><p><span>Bidirectional total</span><b>{results.bidirectionalPathLength.toFixed(2)} {unit}</b></p></article>
+            <article><h3>Geometry &amp; path edits</h3><p><span>Reference area</span><b>{results.areaA.toFixed(2)} {unit}²</b></p><p><span>Test area</span><b>{results.areaB.toFixed(2)} {unit}²</b></p><p><span>APL: path to add</span><b>{results.addedPathLength.toFixed(2)} {unit}</b></p><p><span>Test excess path</span><b>{results.testExcessPathLength.toFixed(2)} {unit}</b></p><p><span>Bidirectional total</span><b>{results.bidirectionalPathLength.toFixed(2)} {unit}</b></p></article>
           </div>
           <div className="export-actions end">
             <button className="button secondary" onClick={() => downloadText(metricsText(results, unit), "drawn-contour-metrics.txt")}>Download TXT</button>
@@ -654,7 +654,7 @@ export default function ContourApp() {
       </header>
       {page === "explorer" ? <SyntheticExplorer /> : <DrawingWorkspace />}
       <footer>
-        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.1.0</p>
+        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.2.0</p>
         <p>Educational use only. Metric acceptability is task- and context-dependent. <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a></p>
       </footer>
     </div>

@@ -44,9 +44,11 @@ Region areas and intersections are calculated from the complete contour polygons
 
 Surface contours are sampled at equal arc-length intervals while retaining original vertices so sharp corners are not cut off. Each sample is projected onto the nearest segment of the opposite contour. Surface DICE and mean surface distance integrate along arc length rather than giving every sampled point equal weight. The Hausdorff percentile is calculated in both directions and the larger directional value is reported.
 
-APL follows the reference-ground-truth convention: it is the length of the **reference** contour lying beyond tolerance from the test contour. The reverse direction is labelled **test excess path**, and the app also reports their sum. The same floating-point tolerance is used for threshold classification in the calculations and plots.
+APL follows the reference-ground-truth convention: it is the length of the **ground-truth boundary path** not captured within tolerance by the test contour. It is therefore the path that must be added when correcting the test, not a path requiring correction on the reference itself. The reverse direction is labelled **test excess path**, and the app also reports their sum. The same floating-point tolerance is used for threshold classification in the calculations and plots.
 
 The coordinate plots span −10 to +10 on each axis, but that range is a display window only. Metrics use the complete contour geometry and the app warns when a contour extends beyond the visible field.
+
+Plot colours describe the quantity shown rather than repeating contour identities. The bidirectional surface-distance plot colours both surfaces only by tolerance status. The Surface Dice test-to-reference map keeps the reference and its tolerance band in blue/green and classifies the test surface as within or outside tolerance. The APL plot colours the ground-truth path as already represented in the test or as boundary path that must be added to the test.
 
 CT images are illustrative backgrounds only. Their displayed centimetre scale is relative and is not calibrated to DICOM pixel spacing.
 

@@ -116,7 +116,7 @@ test("surface Dice and mean surface distance are weighted by contour arc length"
   near(metrics.meanSurfaceDistance, 90.25 / 26, 5e-5);
 });
 
-test("APL uses reference-to-test direction and reports the opposite direction separately", () => {
+test("APL measures the ground-truth path to add to the test and reports test excess separately", () => {
   const reference: Point[] = [
     { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 },
   ];

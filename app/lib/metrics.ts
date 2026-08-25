@@ -22,7 +22,7 @@ export type DistanceMetrics = {
   maximumHausdorff: number;
   maxPointA: Point;
   maxPointB: Point;
-  /** Literature-style APL: reference boundary requiring redraw relative to the test contour. */
+  /** Literature-style APL: ground-truth boundary path that must be added to the test contour. */
   addedPathLength: number;
   /** Test boundary lying beyond tolerance from the reference contour. */
   testExcessPathLength: number;
@@ -769,7 +769,7 @@ Reference Area:             ${metrics.areaA.toFixed(2)} ${unit}²
 Test Area:                  ${metrics.areaB.toFixed(2)} ${unit}²
 Intersection Area:          ${metrics.intersectionArea.toFixed(2)} ${unit}²
 Center-to-Center Distance:  ${metrics.centerDistance.toFixed(3)} ${unit}
-APL (reference to redraw):  ${metrics.addedPathLength.toFixed(2)} ${unit}
+APL (path to add to test):  ${metrics.addedPathLength.toFixed(2)} ${unit}
 Test excess path (B→A):     ${metrics.testExcessPathLength.toFixed(2)} ${unit}
 Bidirectional edit path:    ${metrics.bidirectionalPathLength.toFixed(2)} ${unit}
 

@@ -32,6 +32,78 @@ function pathFor(points: Point[]): string {
     .join(" ")} Z`;
 }
 
+type ClassifiedSegment = {
+  start: Point;
+  end: Point;
+  accepted: boolean;
+};
+
+function classifyContourSegments(
+  points: Point[],
+  distances: number[],
+  threshold: number,
+): ClassifiedSegment[] {
+  if (points.length < 2 || distances.length !== points.length) return [];
+  const cutoff = threshold + 1e-9;
+  const segments: ClassifiedSegment[] = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    const start = points[index];
+    const end = points[nextIndex];
+    const startDistance = distances[index];
+    const endDistance = distances[nextIndex];
+    const startAccepted = startDistance <= cutoff;
+    const endAccepted = endDistance <= cutoff;
+
+    if (startAccepted === endAccepted || Math.abs(endDistance - startDistance) <= 1e-12) {
+      segments.push({ start, end, accepted: startAccepted });
+      continue;
+    }
+
+    const fraction = Math.min(1, Math.max(0, (cutoff - startDistance) / (endDistance - startDistance)));
+    const crossing = {
+      x: start.x + (end.x - start.x) * fraction,
+      y: start.y + (end.y - start.y) * fraction,
+    };
+    segments.push({ start, end: crossing, accepted: startAccepted });
+    segments.push({ start: crossing, end, accepted: endAccepted });
+  }
+  return segments;
+}
+
+function ToleranceContour({
+  points,
+  distances,
+  threshold,
+  prefix,
+  opacity = 0.92,
+}: {
+  points: Point[];
+  distances: number[];
+  threshold: number;
+  prefix: string;
+  opacity?: number;
+}) {
+  return (
+    <>
+      {classifyContourSegments(points, distances, threshold).map((segment, index) => (
+        <line
+          key={`${prefix}-${index}`}
+          x1={xPixel(segment.start.x)}
+          y1={yPixel(segment.start.y)}
+          x2={xPixel(segment.end.x)}
+          y2={yPixel(segment.end.y)}
+          stroke={segment.accepted ? "#138a5b" : "#f29a38"}
+          strokeWidth="3.8"
+          strokeLinecap="round"
+          opacity={opacity}
+        />
+      ))}
+    </>
+  );
+}
+
 function heatColor(value: number, maximum: number): string {
   const fraction = maximum > 0 ? Math.min(1, value / maximum) : 0;
   const hue = 176 - fraction * 176;
@@ -86,7 +158,7 @@ function Legend({ items }: { items: Array<{ color: string; label: string; dashed
 }
 
 export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
-  const pointRadius = metrics.pointsA.length > 250 ? 1.55 : 2.1;
+  const heatPointRadius = metrics.pointsA.length > 250 ? 1.55 : 2.1;
   const maximumDistance = Math.max(metrics.maximumHausdorff, metrics.threshold, 0.01);
   const thresholdStroke = Math.max(3, (metrics.threshold / (WORLD_MAX - WORLD_MIN)) * PLOT * 2);
   const isSurface = kind === "surface";
@@ -100,7 +172,7 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
       <div className="plot-card-heading">
         <h3>{title}</h3>
         {isOverlap && <strong>DICE {metrics.dice.toFixed(3)}</strong>}
-        {isApl && <strong>APL (reference) {metrics.addedPathLength.toFixed(2)} {unit}</strong>}
+        {isApl && <strong>APL {metrics.addedPathLength.toFixed(2)} {unit}</strong>}
       </div>
       <svg viewBox={`0 0 ${VIEW} ${VIEW}`} role="img" aria-label={title} className="metric-plot">
         <PlotFrame unit={unit}>
@@ -120,57 +192,42 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
               <path d={pathFor(metrics.pointsA)} fill="#2268c7" fillOpacity="0.28" stroke="#1855a5" strokeWidth="1.7" />
               <path d={pathFor(metrics.pointsB)} fill="#ea5b61" fillOpacity="0.30" stroke="#c43e48" strokeWidth="1.7" />
             </>
-          ) : (
+          ) : isAcceptance ? (
+            <path d={pathFor(metrics.pointsA)} fill="none" stroke="#2268c7" strokeWidth="1.8" />
+          ) : isHeat ? (
             <>
               <path d={pathFor(metrics.pointsA)} fill="none" stroke="#2268c7" strokeWidth="1.6" />
               <path d={pathFor(metrics.pointsB)} fill="none" stroke="#df4f58" strokeWidth="1.6" />
             </>
+          ) : null}
+
+          {(isSurface || isAcceptance) && (
+            <ToleranceContour
+              points={metrics.pointsB}
+              distances={metrics.bToA}
+              threshold={metrics.threshold}
+              prefix="test-tolerance"
+            />
           )}
 
-          {(isSurface || isAcceptance) &&
-            metrics.pointsB.map((point, index) => {
-              const accepted = metrics.bToA[index] <= metrics.threshold + 1e-9;
-              return (
-                <circle
-                  key={`b-${index}`}
-                  cx={xPixel(point.x)}
-                  cy={yPixel(point.y)}
-                  r={pointRadius}
-                  fill={accepted ? "#138a5b" : "#f29a38"}
-                  opacity="0.88"
-                />
-              );
-            })}
+          {isSurface && (
+            <ToleranceContour
+              points={metrics.pointsA}
+              distances={metrics.aToB}
+              threshold={metrics.threshold}
+              prefix="reference-tolerance"
+              opacity={0.82}
+            />
+          )}
 
-          {isSurface &&
-            metrics.pointsA.map((point, index) => {
-              const accepted = metrics.aToB[index] <= metrics.threshold + 1e-9;
-              return (
-                <circle
-                  key={`a-${index}`}
-                  cx={xPixel(point.x)}
-                  cy={yPixel(point.y)}
-                  r={pointRadius}
-                  fill={accepted ? "#138a5b" : "#f29a38"}
-                  opacity="0.78"
-                />
-              );
-            })}
-
-          {isApl &&
-            metrics.pointsA.map((point, index) => {
-              const accepted = metrics.aToB[index] <= metrics.threshold + 1e-9;
-              return (
-                <circle
-                  key={`apl-a-${index}`}
-                  cx={xPixel(point.x)}
-                  cy={yPixel(point.y)}
-                  r={pointRadius}
-                  fill={accepted ? "#138a5b" : "#f29a38"}
-                  opacity="0.88"
-                />
-              );
-            })}
+          {isApl && (
+            <ToleranceContour
+              points={metrics.pointsA}
+              distances={metrics.aToB}
+              threshold={metrics.threshold}
+              prefix="apl-reference-path"
+            />
+          )}
 
           {isHeat && (
             <>
@@ -179,17 +236,17 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
                   key={`heat-a-${index}`}
                   cx={xPixel(point.x)}
                   cy={yPixel(point.y)}
-                  r={pointRadius + 0.4}
+                  r={heatPointRadius + 0.4}
                   fill={heatColor(metrics.aToB[index], maximumDistance)}
                 />
               ))}
               {metrics.pointsB.map((point, index) => (
                 <rect
                   key={`heat-b-${index}`}
-                  x={xPixel(point.x) - pointRadius}
-                  y={yPixel(point.y) - pointRadius}
-                  width={pointRadius * 2}
-                  height={pointRadius * 2}
+                  x={xPixel(point.x) - heatPointRadius}
+                  y={yPixel(point.y) - heatPointRadius}
+                  width={heatPointRadius * 2}
+                  height={heatPointRadius * 2}
                   fill={heatColor(metrics.bToA[index], maximumDistance)}
                 />
               ))}
@@ -222,10 +279,8 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
       {isSurface && (
         <Legend
           items={[
-            { color: "#2268c7", label: "Reference contour" },
-            { color: "#df4f58", label: "Test contour" },
-            { color: "#138a5b", label: "Either surface: within tolerance" },
-            { color: "#f29a38", label: "Either surface: outside tolerance" },
+            { color: "#138a5b", label: "Within tolerance" },
+            { color: "#f29a38", label: "Outside tolerance" },
             { color: "#17233a", label: "Maximum HD pair", dashed: true },
           ]}
         />
@@ -234,7 +289,6 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
         <Legend
           items={[
             { color: "#2268c7", label: "Reference contour" },
-            { color: "#df4f58", label: "Test contour" },
             { color: "#bfe8d3", label: "Reference tolerance band" },
             { color: "#138a5b", label: "Test within tolerance" },
             { color: "#f29a38", label: "Test outside tolerance" },
@@ -244,10 +298,8 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
       {isApl && (
         <Legend
           items={[
-            { color: "#2268c7", label: "Reference contour" },
-            { color: "#df4f58", label: "Test contour" },
-            { color: "#138a5b", label: "Reference within tolerance" },
-            { color: "#f29a38", label: "Reference requiring redraw (APL)" },
+            { color: "#138a5b", label: "Ground-truth path represented in test" },
+            { color: "#f29a38", label: "Path to add to test (APL)" },
           ]}
         />
       )}
