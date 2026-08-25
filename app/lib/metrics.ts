@@ -14,13 +14,20 @@ export type DistanceMetrics = {
   bToA: number[];
   aClosest: number[];
   bClosest: number[];
+  aClosestPoints: Point[];
+  bClosestPoints: Point[];
   surfaceDice: number;
   meanSurfaceDistance: number;
   hausdorffPercentile: number;
   maximumHausdorff: number;
   maxPointA: Point;
   maxPointB: Point;
+  /** Literature-style APL: reference boundary requiring redraw relative to the test contour. */
   addedPathLength: number;
+  /** Test boundary lying beyond tolerance from the reference contour. */
+  testExcessPathLength: number;
+  /** Sum of the two directional out-of-tolerance path lengths. */
+  bidirectionalPathLength: number;
 };
 
 export type ContourMetrics = MaskMetrics &
@@ -30,7 +37,9 @@ export type ContourMetrics = MaskMetrics &
     pointsB: Point[];
     threshold: number;
     percentile: number;
-    overlapMethod: "analytic circles" | "rasterised contours";
+    overlapMethod: "polygon geometry";
+    outOfBoundsA: boolean;
+    outOfBoundsB: boolean;
   };
 
 export type CircleParameters = {
@@ -52,7 +61,7 @@ export type CircleParameters = {
 export const WORLD_MIN = -10;
 export const WORLD_MAX = 10;
 export const WORLD_SPAN = WORLD_MAX - WORLD_MIN;
-export const MASK_SIZE = 256;
+const OVERLAP_SAMPLE_POINTS = 360;
 
 const EPSILON = 1e-9;
 
@@ -64,7 +73,7 @@ export function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-export function polygonArea(points: Point[]): number {
+function signedPolygonArea(points: Point[]): number {
   if (points.length < 3) return 0;
   let twiceArea = 0;
   for (let index = 0; index < points.length; index += 1) {
@@ -72,7 +81,195 @@ export function polygonArea(points: Point[]): number {
     const next = points[(index + 1) % points.length];
     twiceArea += current.x * next.y - next.x * current.y;
   }
-  return Math.abs(twiceArea) / 2;
+  return twiceArea / 2;
+}
+
+export function polygonArea(points: Point[]): number {
+  return Math.abs(signedPolygonArea(points));
+}
+
+function cross(a: Point, b: Point, c: Point): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function samePoint(a: Point, b: Point): boolean {
+  return distance(a, b) <= EPSILON;
+}
+
+function sanitisePolygon(points: Point[]): Point[] {
+  const cleaned: Point[] = [];
+  for (const point of points) {
+    if (cleaned.length === 0 || !samePoint(cleaned[cleaned.length - 1], point)) cleaned.push(point);
+  }
+  if (cleaned.length > 1 && samePoint(cleaned[0], cleaned[cleaned.length - 1])) cleaned.pop();
+
+  let changed = true;
+  while (changed && cleaned.length >= 3) {
+    changed = false;
+    for (let index = 0; index < cleaned.length; index += 1) {
+      const previous = cleaned[(index - 1 + cleaned.length) % cleaned.length];
+      const current = cleaned[index];
+      const next = cleaned[(index + 1) % cleaned.length];
+      if (Math.abs(cross(previous, current, next)) <= EPSILON) {
+        cleaned.splice(index, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return cleaned;
+}
+
+function within(value: number, first: number, second: number): boolean {
+  return value >= Math.min(first, second) - EPSILON && value <= Math.max(first, second) + EPSILON;
+}
+
+function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
+  const abC = cross(a, b, c);
+  const abD = cross(a, b, d);
+  const cdA = cross(c, d, a);
+  const cdB = cross(c, d, b);
+  if (
+    ((abC > EPSILON && abD < -EPSILON) || (abC < -EPSILON && abD > EPSILON)) &&
+    ((cdA > EPSILON && cdB < -EPSILON) || (cdA < -EPSILON && cdB > EPSILON))
+  ) return true;
+  if (Math.abs(abC) <= EPSILON && within(c.x, a.x, b.x) && within(c.y, a.y, b.y)) return true;
+  if (Math.abs(abD) <= EPSILON && within(d.x, a.x, b.x) && within(d.y, a.y, b.y)) return true;
+  if (Math.abs(cdA) <= EPSILON && within(a.x, c.x, d.x) && within(a.y, c.y, d.y)) return true;
+  if (Math.abs(cdB) <= EPSILON && within(b.x, c.x, d.x) && within(b.y, c.y, d.y)) return true;
+  return false;
+}
+
+export function polygonSelfIntersects(points: Point[]): boolean {
+  const polygon = sanitisePolygon(points);
+  const count = polygon.length;
+  if (count < 3) return false;
+  for (let first = 0; first < count; first += 1) {
+    const firstNext = (first + 1) % count;
+    for (let second = first + 1; second < count; second += 1) {
+      const secondNext = (second + 1) % count;
+      if (first === second || firstNext === second || secondNext === first) continue;
+      if (segmentsIntersect(polygon[first], polygon[firstNext], polygon[second], polygon[secondNext])) return true;
+    }
+  }
+  return false;
+}
+
+function pointInTriangle(point: Point, a: Point, b: Point, c: Point): boolean {
+  return cross(a, b, point) >= -EPSILON && cross(b, c, point) >= -EPSILON && cross(c, a, point) >= -EPSILON;
+}
+
+function triangulatePolygon(points: Point[]): Point[][] | null {
+  let polygon = sanitisePolygon(points);
+  if (polygon.length < 3 || polygonArea(polygon) <= EPSILON || polygonSelfIntersects(polygon)) return null;
+  if (signedPolygonArea(polygon) < 0) polygon = [...polygon].reverse();
+  const indices = polygon.map((_, index) => index);
+  const triangles: Point[][] = [];
+  let guard = polygon.length * polygon.length;
+
+  while (indices.length > 3 && guard > 0) {
+    let earFound = false;
+    for (let position = 0; position < indices.length; position += 1) {
+      const previousIndex = indices[(position - 1 + indices.length) % indices.length];
+      const currentIndex = indices[position];
+      const nextIndex = indices[(position + 1) % indices.length];
+      const a = polygon[previousIndex];
+      const b = polygon[currentIndex];
+      const c = polygon[nextIndex];
+      if (cross(a, b, c) <= EPSILON) continue;
+      const containsVertex = indices.some((candidate) =>
+        candidate !== previousIndex && candidate !== currentIndex && candidate !== nextIndex &&
+        pointInTriangle(polygon[candidate], a, b, c));
+      if (containsVertex) continue;
+      triangles.push([a, b, c]);
+      indices.splice(position, 1);
+      earFound = true;
+      break;
+    }
+    if (!earFound) return null;
+    guard -= 1;
+  }
+  if (indices.length === 3) triangles.push(indices.map((index) => polygon[index]));
+  return triangles;
+}
+
+function lineIntersection(start: Point, end: Point, clipStart: Point, clipEnd: Point): Point {
+  const segment = { x: end.x - start.x, y: end.y - start.y };
+  const clip = { x: clipEnd.x - clipStart.x, y: clipEnd.y - clipStart.y };
+  const denominator = segment.x * clip.y - segment.y * clip.x;
+  if (Math.abs(denominator) <= EPSILON) return end;
+  const offset = { x: clipStart.x - start.x, y: clipStart.y - start.y };
+  const fraction = (offset.x * clip.y - offset.y * clip.x) / denominator;
+  return { x: start.x + segment.x * fraction, y: start.y + segment.y * fraction };
+}
+
+function intersectConvexPolygons(subject: Point[], clipPolygon: Point[]): Point[] {
+  let output = subject;
+  for (let edge = 0; edge < clipPolygon.length && output.length > 0; edge += 1) {
+    const clipStart = clipPolygon[edge];
+    const clipEnd = clipPolygon[(edge + 1) % clipPolygon.length];
+    const input = output;
+    output = [];
+    let previous = input[input.length - 1];
+    let previousInside = cross(clipStart, clipEnd, previous) >= -EPSILON;
+    for (const current of input) {
+      const currentInside = cross(clipStart, clipEnd, current) >= -EPSILON;
+      if (currentInside !== previousInside) output.push(lineIntersection(previous, current, clipStart, clipEnd));
+      if (currentInside) output.push(current);
+      previous = current;
+      previousInside = currentInside;
+    }
+  }
+  return output;
+}
+
+function boundsOverlap(first: Point[], second: Point[]): boolean {
+  const firstX = first.map((point) => point.x);
+  const firstY = first.map((point) => point.y);
+  const secondX = second.map((point) => point.x);
+  const secondY = second.map((point) => point.y);
+  return !(
+    Math.max(...firstX) < Math.min(...secondX) - EPSILON ||
+    Math.max(...secondX) < Math.min(...firstX) - EPSILON ||
+    Math.max(...firstY) < Math.min(...secondY) - EPSILON ||
+    Math.max(...secondY) < Math.min(...firstY) - EPSILON
+  );
+}
+
+export function polygonIntersectionArea(pointsA: Point[], pointsB: Point[]): number {
+  const areaA = polygonArea(pointsA);
+  const areaB = polygonArea(pointsB);
+  if (areaA <= EPSILON || areaB <= EPSILON) return 0;
+  if (!boundsOverlap(pointsA, pointsB)) return 0;
+  const trianglesA = triangulatePolygon(pointsA);
+  const trianglesB = triangulatePolygon(pointsB);
+  if (!trianglesA || !trianglesB) {
+    throw new Error("Contours must be simple closed loops without self-intersections.");
+  }
+  let intersection = 0;
+  for (const triangleA of trianglesA) {
+    for (const triangleB of trianglesB) {
+      if (!boundsOverlap(triangleA, triangleB)) continue;
+      intersection += polygonArea(intersectConvexPolygons(triangleA, triangleB));
+    }
+  }
+  return clamp(intersection, 0, Math.min(areaA, areaB));
+}
+
+export function metricsFromPolygons(pointsA: Point[], pointsB: Point[]): MaskMetrics {
+  const areaA = polygonArea(pointsA);
+  const areaB = polygonArea(pointsB);
+  const intersectionArea = polygonIntersectionArea(pointsA, pointsB);
+  const union = areaA + areaB - intersectionArea;
+  const larger = Math.max(areaA, areaB);
+  return {
+    dice: areaA + areaB > EPSILON ? (2 * intersectionArea) / (areaA + areaB) : 0,
+    jaccard: union > EPSILON ? intersectionArea / union : 0,
+    areaA,
+    areaB,
+    intersectionArea,
+    volumeRatio: larger > EPSILON ? Math.min(areaA, areaB) / larger : 0,
+  };
 }
 
 export function polygonCentroid(points: Point[]): Point {
@@ -113,76 +310,36 @@ export function pointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside;
 }
 
-export function rasterisePolygon(
-  polygon: Point[],
-  size = MASK_SIZE,
-  worldMin = WORLD_MIN,
-  worldMax = WORLD_MAX,
-): Uint8Array {
-  const mask = new Uint8Array(size * size);
-  if (polygon.length < 3) return mask;
-
-  const span = worldMax - worldMin;
-  const xs = polygon.map((point) => point.x);
-  const ys = polygon.map((point) => point.y);
-  const minColumn = clamp(Math.floor(((Math.min(...xs) - worldMin) / span) * size), 0, size - 1);
-  const maxColumn = clamp(Math.ceil(((Math.max(...xs) - worldMin) / span) * size), 0, size - 1);
-  const minRow = clamp(Math.floor(((worldMax - Math.max(...ys)) / span) * size), 0, size - 1);
-  const maxRow = clamp(Math.ceil(((worldMax - Math.min(...ys)) / span) * size), 0, size - 1);
-
-  for (let row = minRow; row <= maxRow; row += 1) {
-    const y = worldMax - ((row + 0.5) / size) * span;
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = worldMin + ((column + 0.5) / size) * span;
-      if (pointInPolygon({ x, y }, polygon)) mask[row * size + column] = 1;
-    }
-  }
-  return mask;
-}
-
-export function metricsFromMasks(
-  maskA: Uint8Array,
-  maskB: Uint8Array,
-  pixelArea: number,
-): MaskMetrics {
-  if (maskA.length !== maskB.length) throw new Error("Masks must have matching dimensions.");
-  let countA = 0;
-  let countB = 0;
-  let intersection = 0;
-  for (let index = 0; index < maskA.length; index += 1) {
-    countA += maskA[index];
-    countB += maskB[index];
-    if (maskA[index] && maskB[index]) intersection += 1;
-  }
-  const union = countA + countB - intersection;
-  const denominator = countA + countB;
-  const larger = Math.max(countA, countB);
-  return {
-    dice: denominator > 0 ? (2 * intersection) / denominator : 0,
-    jaccard: union > 0 ? intersection / union : 0,
-    areaA: countA * pixelArea,
-    areaB: countB * pixelArea,
-    intersectionArea: intersection * pixelArea,
-    volumeRatio: larger > 0 ? Math.min(countA, countB) / larger : 0,
-  };
-}
-
-export function resampleClosedPolygon(points: Point[], numberOfPoints = 400): Point[] {
+export function resampleClosedPolygon(
+  points: Point[],
+  numberOfPoints = 400,
+  retainVertices = true,
+): Point[] {
   if (points.length < 2 || numberOfPoints <= 0) return [];
   const segmentLengths: number[] = [];
+  const segmentStarts: number[] = [];
   let perimeter = 0;
   for (let index = 0; index < points.length; index += 1) {
+    segmentStarts.push(perimeter);
     const length = distance(points[index], points[(index + 1) % points.length]);
     segmentLengths.push(length);
     perimeter += length;
   }
   if (perimeter < EPSILON) return [];
 
+  // Uniform samples make point density independent of how a contour was drawn. Keeping every
+  // original vertex as well prevents the resampled polyline from cutting across sharp corners.
+  const positions = [
+    ...Array.from({ length: Math.max(3, Math.floor(numberOfPoints)) }, (_, index) =>
+      (index / Math.max(3, Math.floor(numberOfPoints))) * perimeter),
+    ...(retainVertices ? segmentStarts : []),
+  ].sort((a, b) => a - b).filter((value, index, values) =>
+    index === 0 || value - values[index - 1] > EPSILON);
+
   const result: Point[] = [];
   let segmentIndex = 0;
   let segmentStartLength = 0;
-  for (let sampleIndex = 0; sampleIndex < numberOfPoints; sampleIndex += 1) {
-    const target = (sampleIndex / numberOfPoints) * perimeter;
+  for (const target of positions) {
     while (
       segmentIndex < segmentLengths.length - 1 &&
       segmentStartLength + segmentLengths[segmentIndex] < target
@@ -250,18 +407,14 @@ export function generateCirclePoints(
   const radialKnots = Array.from({ length: knotCount }, () =>
     noiseLevel > 0 ? normalRandom(random) * 0.25 * noiseLevel : 0,
   );
-  const angularKnots = Array.from({ length: knotCount }, () =>
-    noiseLevel > 0 ? normalRandom(random) * 0.1 * noiseLevel : 0,
-  );
 
   return Array.from({ length: count }, (_, index) => {
     const position = index / count;
-    const baseAngle = position * Math.PI * 2;
+    const angle = position * Math.PI * 2;
     const perturbedRadius = Math.max(
       0,
       radius * (1 + periodicCatmullRom(radialKnots, position)),
     );
-    const angle = baseAngle + periodicCatmullRom(angularKnots, position);
     return {
       x: center.x + perturbedRadius * Math.cos(angle),
       y: center.y + perturbedRadius * Math.sin(angle),
@@ -269,45 +422,72 @@ export function generateCirclePoints(
   });
 }
 
+function directedNearestDistances(source: Point[], target: Point[]): {
+  distances: number[];
+  closest: number[];
+  closestPoints: Point[];
+} {
+  if (source.length === 0 || target.length === 0) {
+    return {
+      distances: source.map(() => Number.POSITIVE_INFINITY),
+      closest: source.map(() => -1),
+      closestPoints: source.map(() => ({ x: Number.NaN, y: Number.NaN })),
+    };
+  }
+
+  const closestPointOnSegment = (point: Point, start: Point, end: Point): { point: Point; squared: number } => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const fraction = lengthSquared > EPSILON
+      ? clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1)
+      : 0;
+    const closestPoint = { x: start.x + fraction * dx, y: start.y + fraction * dy };
+    const offsetX = point.x - closestPoint.x;
+    const offsetY = point.y - closestPoint.y;
+    return { point: closestPoint, squared: offsetX * offsetX + offsetY * offsetY };
+  };
+
+  const distances: number[] = [];
+  const closest: number[] = [];
+  const closestPoints: Point[] = [];
+  for (const point of source) {
+    let minimumSquared = Number.POSITIVE_INFINITY;
+    let minimumIndex = -1;
+    let minimumPoint = target[0];
+    for (let index = 0; index < target.length; index += 1) {
+      const projection = closestPointOnSegment(point, target[index], target[(index + 1) % target.length]);
+      if (projection.squared < minimumSquared) {
+        minimumSquared = projection.squared;
+        minimumIndex = index;
+        minimumPoint = projection.point;
+      }
+    }
+    distances.push(Math.sqrt(minimumSquared));
+    closest.push(minimumIndex);
+    closestPoints.push(minimumPoint);
+  }
+  return { distances, closest, closestPoints };
+}
+
 export function nearestDistances(pointsA: Point[], pointsB: Point[]): {
   aToB: number[];
   bToA: number[];
   aClosest: number[];
   bClosest: number[];
+  aClosestPoints: Point[];
+  bClosestPoints: Point[];
 } {
-  if (pointsA.length === 0 || pointsB.length === 0) {
-    return {
-      aToB: pointsA.map(() => Number.POSITIVE_INFINITY),
-      bToA: pointsB.map(() => Number.POSITIVE_INFINITY),
-      aClosest: pointsA.map(() => -1),
-      bClosest: pointsB.map(() => -1),
-    };
-  }
-
-  const directed = (source: Point[], target: Point[]) => {
-    const distances: number[] = [];
-    const closest: number[] = [];
-    for (const point of source) {
-      let minimumSquared = Number.POSITIVE_INFINITY;
-      let minimumIndex = -1;
-      for (let index = 0; index < target.length; index += 1) {
-        const dx = point.x - target[index].x;
-        const dy = point.y - target[index].y;
-        const squared = dx * dx + dy * dy;
-        if (squared < minimumSquared) {
-          minimumSquared = squared;
-          minimumIndex = index;
-        }
-      }
-      distances.push(Math.sqrt(minimumSquared));
-      closest.push(minimumIndex);
-    }
-    return { distances, closest };
+  const a = directedNearestDistances(pointsA, pointsB);
+  const b = directedNearestDistances(pointsB, pointsA);
+  return {
+    aToB: a.distances,
+    bToA: b.distances,
+    aClosest: a.closest,
+    bClosest: b.closest,
+    aClosestPoints: a.closestPoints,
+    bClosestPoints: b.closestPoints,
   };
-
-  const a = directed(pointsA, pointsB);
-  const b = directed(pointsB, pointsA);
-  return { aToB: a.distances, bToA: b.distances, aClosest: a.closest, bClosest: b.closest };
 }
 
 export function percentile(values: number[], requestedPercentile: number): number {
@@ -322,30 +502,51 @@ export function percentile(values: number[], requestedPercentile: number): numbe
 }
 
 export function addedPathLength(
-  testPoints: Point[],
-  testToReferenceDistances: number[],
+  contourPoints: Point[],
+  distancesToOtherContour: number[],
   threshold: number,
 ): number {
-  if (testPoints.length < 2 || testPoints.length !== testToReferenceDistances.length) return 0;
+  if (contourPoints.length < 2 || contourPoints.length !== distancesToOtherContour.length) return 0;
+  const cutoff = Math.max(0, threshold) + EPSILON;
   let lengthOutside = 0;
-  for (let index = 0; index < testPoints.length; index += 1) {
-    const nextIndex = (index + 1) % testPoints.length;
-    const segmentLength = distance(testPoints[index], testPoints[nextIndex]);
-    const firstDistance = testToReferenceDistances[index];
-    const secondDistance = testToReferenceDistances[nextIndex];
-    const firstOutside = firstDistance > threshold;
-    const secondOutside = secondDistance > threshold;
+  for (let index = 0; index < contourPoints.length; index += 1) {
+    const nextIndex = (index + 1) % contourPoints.length;
+    const segmentLength = distance(contourPoints[index], contourPoints[nextIndex]);
+    const firstDistance = distancesToOtherContour[index];
+    const secondDistance = distancesToOtherContour[nextIndex];
+    const firstOutside = firstDistance > cutoff;
+    const secondOutside = secondDistance > cutoff;
     if (firstOutside && secondOutside) {
       lengthOutside += segmentLength;
     } else if (firstOutside !== secondOutside) {
       const denominator = Math.abs(firstDistance - secondDistance);
       if (denominator > EPSILON) {
         const outsideDistance = firstOutside ? firstDistance : secondDistance;
-        lengthOutside += segmentLength * clamp((outsideDistance - threshold) / denominator, 0, 1);
+        lengthOutside += segmentLength * clamp((outsideDistance - cutoff) / denominator, 0, 1);
       }
     }
   }
   return lengthOutside;
+}
+
+export function arcLength(points: Point[]): number {
+  if (points.length < 2) return 0;
+  let total = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    total += distance(points[index], points[(index + 1) % points.length]);
+  }
+  return total;
+}
+
+function integratedDistance(points: Point[], values: number[]): number {
+  if (points.length < 2 || points.length !== values.length) return 0;
+  let integral = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    if (!Number.isFinite(values[index]) || !Number.isFinite(values[nextIndex])) continue;
+    integral += distance(points[index], points[nextIndex]) * (values[index] + values[nextIndex]) / 2;
+  }
+  return integral;
 }
 
 export function distanceMetrics(
@@ -353,16 +554,31 @@ export function distanceMetrics(
   pointsB: Point[],
   threshold: number,
   requestedPercentile: number,
+  geometryA = pointsA,
+  geometryB = pointsB,
 ): DistanceMetrics {
-  const nearest = nearestDistances(pointsA, pointsB);
+  const directedA = directedNearestDistances(pointsA, geometryB);
+  const directedB = directedNearestDistances(pointsB, geometryA);
+  const nearest = {
+    aToB: directedA.distances,
+    bToA: directedB.distances,
+    aClosest: directedA.closest,
+    bClosest: directedB.closest,
+    aClosestPoints: directedA.closestPoints,
+    bClosestPoints: directedB.closestPoints,
+  };
   const finiteA = nearest.aToB.filter(Number.isFinite);
   const finiteB = nearest.bToA.filter(Number.isFinite);
-  const meanA = finiteA.length ? finiteA.reduce((sum, value) => sum + value, 0) / finiteA.length : 0;
-  const meanB = finiteB.length ? finiteB.reduce((sum, value) => sum + value, 0) / finiteB.length : 0;
-  const denominator = pointsA.length + pointsB.length;
-  const accepted =
-    nearest.aToB.filter((value) => value <= threshold + EPSILON).length +
-    nearest.bToA.filter((value) => value <= threshold + EPSILON).length;
+  const perimeterA = arcLength(pointsA);
+  const perimeterB = arcLength(pointsB);
+  const totalPerimeter = perimeterA + perimeterB;
+  const referenceAddedPath = addedPathLength(pointsA, nearest.aToB, threshold);
+  const testExcessPath = addedPathLength(pointsB, nearest.bToA, threshold);
+  const acceptedLength = Math.max(0, perimeterA - referenceAddedPath) + Math.max(0, perimeterB - testExcessPath);
+  const fallbackValues = [...finiteA, ...finiteB];
+  const fallbackMean = fallbackValues.length
+    ? fallbackValues.reduce((sum, value) => sum + value, 0) / fallbackValues.length
+    : 0;
 
   let maximum = 0;
   let maxPointA = pointsA[0] ?? { x: 0, y: 0 };
@@ -371,21 +587,25 @@ export function distanceMetrics(
     if (value > maximum && nearest.aClosest[index] >= 0) {
       maximum = value;
       maxPointA = pointsA[index];
-      maxPointB = pointsB[nearest.aClosest[index]];
+      maxPointB = nearest.aClosestPoints[index];
     }
   });
   nearest.bToA.forEach((value, index) => {
     if (value > maximum && nearest.bClosest[index] >= 0) {
       maximum = value;
-      maxPointA = pointsA[nearest.bClosest[index]];
+      maxPointA = nearest.bClosestPoints[index];
       maxPointB = pointsB[index];
     }
   });
 
   return {
     ...nearest,
-    surfaceDice: denominator > 0 ? accepted / denominator : 0,
-    meanSurfaceDistance: finiteA.length && finiteB.length ? (meanA + meanB) / 2 : meanA || meanB,
+    surfaceDice: totalPerimeter > EPSILON
+      ? acceptedLength / totalPerimeter
+      : fallbackValues.length > 0 && fallbackValues.every((value) => value <= threshold + EPSILON) ? 1 : 0,
+    meanSurfaceDistance: totalPerimeter > EPSILON
+      ? (integratedDistance(pointsA, nearest.aToB) + integratedDistance(pointsB, nearest.bToA)) / totalPerimeter
+      : fallbackMean,
     hausdorffPercentile: Math.max(
       percentile(finiteA, requestedPercentile),
       percentile(finiteB, requestedPercentile),
@@ -393,7 +613,9 @@ export function distanceMetrics(
     maximumHausdorff: maximum,
     maxPointA,
     maxPointB,
-    addedPathLength: addedPathLength(pointsB, nearest.bToA, threshold),
+    addedPathLength: referenceAddedPath,
+    testExcessPathLength: testExcessPath,
+    bidirectionalPathLength: referenceAddedPath + testExcessPath,
   };
 }
 
@@ -416,66 +638,47 @@ export function circleIntersectionArea(radiusA: number, radiusB: number, centerD
   );
 }
 
-function analyticCircleMaskMetrics(
-  centerA: Point,
-  radiusA: number,
-  centerB: Point,
-  radiusB: number,
-): MaskMetrics {
-  const areaA = Math.PI * radiusA * radiusA;
-  const areaB = Math.PI * radiusB * radiusB;
-  const intersectionArea = circleIntersectionArea(radiusA, radiusB, distance(centerA, centerB));
-  const union = areaA + areaB - intersectionArea;
-  const larger = Math.max(areaA, areaB);
-  return {
-    dice: areaA + areaB > 0 ? (2 * intersectionArea) / (areaA + areaB) : 0,
-    jaccard: union > 0 ? intersectionArea / union : 0,
-    areaA,
-    areaB,
-    intersectionArea,
-    volumeRatio: larger > 0 ? Math.min(areaA, areaB) / larger : 0,
-  };
+function sampledContour(points: Point[], samplePoints: number): Point[] {
+  const sampled = resampleClosedPolygon(points, samplePoints, false);
+  return sampled.length > 0 ? sampled : points.slice(0, 1);
+}
+
+export function contourOutsideWorld(points: Point[]): boolean {
+  return points.some((point) =>
+    point.x < WORLD_MIN - EPSILON || point.x > WORLD_MAX + EPSILON ||
+    point.y < WORLD_MIN - EPSILON || point.y > WORLD_MAX + EPSILON);
 }
 
 export function computeCircleMetrics(parameters: CircleParameters): ContourMetrics {
   const centerA = { x: parameters.circle1X, y: parameters.circle1Y };
   const centerB = { x: parameters.circle2X, y: parameters.circle2Y };
-  const pointsA = generateCirclePoints(
+  const shapeA = generateCirclePoints(
     centerA,
     parameters.radius1,
-    parameters.samplePoints,
+    OVERLAP_SAMPLE_POINTS,
     parameters.noise1,
     parameters.seed1,
   );
-  const pointsB = generateCirclePoints(
+  const shapeB = generateCirclePoints(
     centerB,
     parameters.radius2,
-    parameters.samplePoints,
+    OVERLAP_SAMPLE_POINTS,
     parameters.noise2,
     parameters.seed2,
   );
-  const hasNoise = parameters.noise1 > 0 || parameters.noise2 > 0;
-  let overlap: MaskMetrics;
-  let overlapMethod: ContourMetrics["overlapMethod"];
-  if (hasNoise) {
-    const maskA = rasterisePolygon(pointsA);
-    const maskB = rasterisePolygon(pointsB);
-    const pixelArea = (WORLD_SPAN / MASK_SIZE) ** 2;
-    overlap = metricsFromMasks(maskA, maskB, pixelArea);
-    overlapMethod = "rasterised contours";
-  } else {
-    overlap = analyticCircleMaskMetrics(centerA, parameters.radius1, centerB, parameters.radius2);
-    overlapMethod = "analytic circles";
-  }
+  const pointsA = sampledContour(shapeA, parameters.samplePoints);
+  const pointsB = sampledContour(shapeB, parameters.samplePoints);
   return {
-    ...overlap,
-    ...distanceMetrics(pointsA, pointsB, parameters.threshold, parameters.percentile),
+    ...metricsFromPolygons(shapeA, shapeB),
+    ...distanceMetrics(pointsA, pointsB, parameters.threshold, parameters.percentile, shapeA, shapeB),
     centerDistance: distance(centerA, centerB),
     pointsA,
     pointsB,
     threshold: parameters.threshold,
     percentile: parameters.percentile,
-    overlapMethod,
+    overlapMethod: "polygon geometry",
+    outOfBoundsA: contourOutsideWorld(shapeA),
+    outOfBoundsB: contourOutsideWorld(shapeB),
   };
 }
 
@@ -489,25 +692,27 @@ export function computePolygonMetrics(
   if (polygonA.length < 3 || polygonB.length < 3) {
     throw new Error("Both contours must contain at least three points.");
   }
+  if (polygonSelfIntersects(polygonA) || polygonSelfIntersects(polygonB)) {
+    throw new Error("Contours must be simple closed loops without self-intersections.");
+  }
   const pointsA = resampleClosedPolygon(polygonA, samplePoints);
   const pointsB = resampleClosedPolygon(polygonB, samplePoints);
   if (pointsA.length === 0 || pointsB.length === 0) {
     throw new Error("Both contours must have a non-zero perimeter.");
   }
-  const maskA = rasterisePolygon(polygonA);
-  const maskB = rasterisePolygon(polygonB);
-  const pixelArea = (WORLD_SPAN / MASK_SIZE) ** 2;
   const centerA = polygonCentroid(polygonA);
   const centerB = polygonCentroid(polygonB);
   return {
-    ...metricsFromMasks(maskA, maskB, pixelArea),
-    ...distanceMetrics(pointsA, pointsB, threshold, requestedPercentile),
+    ...metricsFromPolygons(polygonA, polygonB),
+    ...distanceMetrics(pointsA, pointsB, threshold, requestedPercentile, polygonA, polygonB),
     centerDistance: distance(centerA, centerB),
     pointsA,
     pointsB,
     threshold,
     percentile: requestedPercentile,
-    overlapMethod: "rasterised contours",
+    overlapMethod: "polygon geometry",
+    outOfBoundsA: contourOutsideWorld(polygonA),
+    outOfBoundsB: contourOutsideWorld(polygonB),
   };
 }
 
@@ -551,7 +756,7 @@ DICE Coefficient:           ${metrics.dice.toFixed(4)}  (0-1, higher = better ov
 Jaccard Index:              ${metrics.jaccard.toFixed(4)}  (intersection / union)
 Area Ratio:                 ${metrics.volumeRatio.toFixed(4)}  (size similarity)
 
-SURFACE-BASED METRICS (arc-length resampled points)
+SURFACE-BASED METRICS (arc-length weighted; point-to-segment distances)
 ------------------------------------------------------------------
 Surface DICE:               ${metrics.surfaceDice.toFixed(4)}  (agreement @ ${metrics.threshold.toFixed(1)} ${unit})
 Mean Surface Distance:      ${metrics.meanSurfaceDistance.toFixed(3)} ${unit}
@@ -564,7 +769,9 @@ Reference Area:             ${metrics.areaA.toFixed(2)} ${unit}²
 Test Area:                  ${metrics.areaB.toFixed(2)} ${unit}²
 Intersection Area:          ${metrics.intersectionArea.toFixed(2)} ${unit}²
 Center-to-Center Distance:  ${metrics.centerDistance.toFixed(3)} ${unit}
-Added Path Length (APL):    ${metrics.addedPathLength.toFixed(2)} ${unit}
+APL (reference to redraw):  ${metrics.addedPathLength.toFixed(2)} ${unit}
+Test excess path (B→A):     ${metrics.testExcessPathLength.toFixed(2)} ${unit}
+Bidirectional edit path:    ${metrics.bidirectionalPathLength.toFixed(2)} ${unit}
 
 EDUCATIONAL INTERPRETATION ONLY
 Thresholds and acceptable values are anatomy-, task-, resolution-, and institution-dependent.`;

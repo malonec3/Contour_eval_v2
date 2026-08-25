@@ -71,7 +71,7 @@ async function svgToImage(svg: SVGElement): Promise<HTMLImageElement> {
 
 async function downloadPlotDashboard(elementId: string, filename: string) {
   const element = document.getElementById(elementId);
-  const svgs = element ? Array.from(element.querySelectorAll("svg.metric-plot")) : [];
+  const svgs = element ? Array.from(element.querySelectorAll<SVGElement>("svg.metric-plot")) : [];
   if (svgs.length === 0) throw new Error("No plots are available to export.");
   const columns = Math.min(3, svgs.length);
   const rows = Math.ceil(svgs.length / columns);
@@ -155,8 +155,22 @@ function MetricsOverview({ metrics, unit }: { metrics: ContourMetrics; unit: str
       <MetricPill label="Mean distance" value={`${metrics.meanSurfaceDistance.toFixed(2)} ${unit}`} tone="green" />
       <MetricPill label={`HD${Math.round(metrics.percentile)}`} value={`${metrics.hausdorffPercentile.toFixed(2)} ${unit}`} tone="orange" />
       <MetricPill label="Maximum HD" value={`${metrics.maximumHausdorff.toFixed(2)} ${unit}`} tone="orange" />
-      <MetricPill label="APL" value={`${metrics.addedPathLength.toFixed(2)} ${unit}`} tone="blue" />
+      <MetricPill label="APL (reference)" value={`${metrics.addedPathLength.toFixed(2)} ${unit}`} tone="blue" />
     </section>
+  );
+}
+
+function BoundsWarning({ metrics }: { metrics: ContourMetrics }) {
+  if (!metrics.outOfBoundsA && !metrics.outOfBoundsB) return null;
+  const affected = metrics.outOfBoundsA && metrics.outOfBoundsB
+    ? "Both contours extend"
+    : metrics.outOfBoundsA
+      ? "The reference contour extends"
+      : "The test contour extends";
+  return (
+    <p className="bounds-warning" role="status">
+      {affected} beyond the displayed −10 to +10 field. Metrics use the complete contour geometry; plots crop the portion outside the field.
+    </p>
   );
 }
 
@@ -166,14 +180,14 @@ function PlotCollection({ metrics, tab, unit }: { metrics: ContourMetrics; tab: 
       {tab === "overview" ? (
         <>
           <ContourPlot metrics={metrics} kind="surface" title="Surface Distance Analysis" unit={unit} />
-          <ContourPlot metrics={metrics} kind="acceptance" title="Surface DICE @ Threshold" unit={unit} />
+          <ContourPlot metrics={metrics} kind="acceptance" title="Test-to-Reference Tolerance Map" unit={unit} />
           <ContourPlot metrics={metrics} kind="overlap" title="2D Area Overlap" unit={unit} />
         </>
       ) : (
         <>
           <DistanceHistogram metrics={metrics} unit={unit} />
           <ContourPlot metrics={metrics} kind="heat" title="Distance Field Analysis" unit={unit} />
-          <ContourPlot metrics={metrics} kind="apl" title="Added Path Length" unit={unit} />
+          <ContourPlot metrics={metrics} kind="apl" title="Added Path Length (Reference)" unit={unit} />
         </>
       )}
     </div>
@@ -252,10 +266,10 @@ function SyntheticExplorer() {
           <summary>Metric definitions</summary>
           <dl>
             <dt>DICE / Jaccard</dt><dd>2D region overlap. Higher values indicate greater agreement.</dd>
-            <dt>Surface DICE</dt><dd>Fraction of both surfaces lying within the selected tolerance.</dd>
-            <dt>MSD</dt><dd>Mean of the bidirectional nearest-surface distances.</dd>
+            <dt>Surface DICE</dt><dd>Arc length of both surfaces lying within tolerance, divided by their combined perimeter.</dd>
+            <dt>MSD</dt><dd>Arc-length-weighted mean of bidirectional point-to-segment surface distances.</dd>
             <dt>HD percentile</dt><dd>The larger directional percentile, reducing sensitivity to isolated outliers.</dd>
-            <dt>APL</dt><dd>Test-contour length lying beyond the selected tolerance from the reference.</dd>
+            <dt>APL</dt><dd>Reference-contour length requiring redraw because it lies beyond tolerance from the test contour.</dd>
           </dl>
         </details>
       </aside>
@@ -271,6 +285,7 @@ function SyntheticExplorer() {
         </section>
 
         <MetricsOverview metrics={metrics} unit="mm" />
+        <BoundsWarning metrics={metrics} />
         <section id="synthetic-dashboard" className="results-surface dashboard-export">
           <div className="results-toolbar">
             <ResultTabs tab={tab} setTab={setTab} />
@@ -595,11 +610,12 @@ function DrawingWorkspace() {
         <section className="draw-results">
           <div className="results-title-row"><div><div className="eyebrow">Computed comparison</div><h2>Contour analysis</h2></div><ResultTabs tab={tab} setTab={setTab} /></div>
           <MetricsOverview metrics={results} unit={unit} />
+          <BoundsWarning metrics={results} />
           <div id="drawing-dashboard" className="results-surface dashboard-export"><PlotCollection metrics={results} tab={tab} unit={unit} /></div>
           <div className="three-metric-groups">
             <article><h3>2D overlap</h3><p><span>DICE coefficient</span><b>{results.dice.toFixed(4)}</b></p><p><span>Jaccard index</span><b>{results.jaccard.toFixed(4)}</b></p><p><span>Area ratio</span><b>{results.volumeRatio.toFixed(4)}</b></p></article>
             <article><h3>Surface metrics</h3><p><span>Surface DICE</span><b>{results.surfaceDice.toFixed(4)}</b></p><p><span>Mean distance</span><b>{results.meanSurfaceDistance.toFixed(3)} {unit}</b></p><p><span>HD{Math.round(results.percentile)}</span><b>{results.hausdorffPercentile.toFixed(3)} {unit}</b></p></article>
-            <article><h3>Geometry</h3><p><span>Reference area</span><b>{results.areaA.toFixed(2)} {unit}²</b></p><p><span>Test area</span><b>{results.areaB.toFixed(2)} {unit}²</b></p><p><span>APL</span><b>{results.addedPathLength.toFixed(2)} {unit}</b></p></article>
+            <article><h3>Geometry &amp; path edits</h3><p><span>Reference area</span><b>{results.areaA.toFixed(2)} {unit}²</b></p><p><span>Test area</span><b>{results.areaB.toFixed(2)} {unit}²</b></p><p><span>APL (reference)</span><b>{results.addedPathLength.toFixed(2)} {unit}</b></p><p><span>Test excess path</span><b>{results.testExcessPathLength.toFixed(2)} {unit}</b></p><p><span>Bidirectional total</span><b>{results.bidirectionalPathLength.toFixed(2)} {unit}</b></p></article>
           </div>
           <div className="export-actions end">
             <button className="button secondary" onClick={() => downloadText(metricsText(results, unit), "drawn-contour-metrics.txt")}>Download TXT</button>
@@ -638,7 +654,7 @@ export default function ContourApp() {
       </header>
       {page === "explorer" ? <SyntheticExplorer /> : <DrawingWorkspace />}
       <footer>
-        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.0.0</p>
+        <p><strong>RadOnc Contour Metrics Lab</strong> · Ciaran Malone · Version 2.1.0</p>
         <p>Educational use only. Metric acceptability is task- and context-dependent. <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a></p>
       </footer>
     </div>

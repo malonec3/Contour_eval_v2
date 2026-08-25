@@ -100,7 +100,7 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
       <div className="plot-card-heading">
         <h3>{title}</h3>
         {isOverlap && <strong>DICE {metrics.dice.toFixed(3)}</strong>}
-        {isApl && <strong>APL {metrics.addedPathLength.toFixed(2)} {unit}</strong>}
+        {isApl && <strong>APL (reference) {metrics.addedPathLength.toFixed(2)} {unit}</strong>}
       </div>
       <svg viewBox={`0 0 ${VIEW} ${VIEW}`} role="img" aria-label={title} className="metric-plot">
         <PlotFrame unit={unit}>
@@ -123,20 +123,20 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
           ) : (
             <>
               <path d={pathFor(metrics.pointsA)} fill="none" stroke="#2268c7" strokeWidth="1.6" />
-              {!isAcceptance && <path d={pathFor(metrics.pointsB)} fill="none" stroke="#df4f58" strokeWidth="1.6" />}
+              <path d={pathFor(metrics.pointsB)} fill="none" stroke="#df4f58" strokeWidth="1.6" />
             </>
           )}
 
-          {(isSurface || isAcceptance || isApl) &&
+          {(isSurface || isAcceptance) &&
             metrics.pointsB.map((point, index) => {
-              const accepted = metrics.bToA[index] <= metrics.threshold;
+              const accepted = metrics.bToA[index] <= metrics.threshold + 1e-9;
               return (
                 <circle
                   key={`b-${index}`}
                   cx={xPixel(point.x)}
                   cy={yPixel(point.y)}
                   r={pointRadius}
-                  fill={accepted ? "#138a5b" : "#d73f49"}
+                  fill={accepted ? "#138a5b" : "#f29a38"}
                   opacity="0.88"
                 />
               );
@@ -144,7 +144,7 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
 
           {isSurface &&
             metrics.pointsA.map((point, index) => {
-              const accepted = metrics.aToB[index] <= metrics.threshold;
+              const accepted = metrics.aToB[index] <= metrics.threshold + 1e-9;
               return (
                 <circle
                   key={`a-${index}`}
@@ -153,6 +153,21 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
                   r={pointRadius}
                   fill={accepted ? "#138a5b" : "#f29a38"}
                   opacity="0.78"
+                />
+              );
+            })}
+
+          {isApl &&
+            metrics.pointsA.map((point, index) => {
+              const accepted = metrics.aToB[index] <= metrics.threshold + 1e-9;
+              return (
+                <circle
+                  key={`apl-a-${index}`}
+                  cx={xPixel(point.x)}
+                  cy={yPixel(point.y)}
+                  r={pointRadius}
+                  fill={accepted ? "#138a5b" : "#f29a38"}
+                  opacity="0.88"
                 />
               );
             })}
@@ -204,12 +219,35 @@ export function ContourPlot({ metrics, kind, title, unit }: ContourPlotProps) {
           <span>0</span><i /><span>{maximumDistance.toFixed(1)} {unit}</span>
         </div>
       )}
-      {(isSurface || isAcceptance || isApl) && (
+      {isSurface && (
         <Legend
           items={[
-            { color: "#2268c7", label: "Reference" },
-            { color: "#138a5b", label: "Within tolerance" },
-            { color: isSurface ? "#f29a38" : "#d73f49", label: "Outside tolerance" },
+            { color: "#2268c7", label: "Reference contour" },
+            { color: "#df4f58", label: "Test contour" },
+            { color: "#138a5b", label: "Either surface: within tolerance" },
+            { color: "#f29a38", label: "Either surface: outside tolerance" },
+            { color: "#17233a", label: "Maximum HD pair", dashed: true },
+          ]}
+        />
+      )}
+      {isAcceptance && (
+        <Legend
+          items={[
+            { color: "#2268c7", label: "Reference contour" },
+            { color: "#df4f58", label: "Test contour" },
+            { color: "#bfe8d3", label: "Reference tolerance band" },
+            { color: "#138a5b", label: "Test within tolerance" },
+            { color: "#f29a38", label: "Test outside tolerance" },
+          ]}
+        />
+      )}
+      {isApl && (
+        <Legend
+          items={[
+            { color: "#2268c7", label: "Reference contour" },
+            { color: "#df4f58", label: "Test contour" },
+            { color: "#138a5b", label: "Reference within tolerance" },
+            { color: "#f29a38", label: "Reference requiring redraw (APL)" },
           ]}
         />
       )}
